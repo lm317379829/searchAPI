@@ -14,9 +14,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
-      
     - name: Bump Version and Push Tag
       id: bump
       uses: anothrNick/github-tag-action@v1
@@ -38,7 +35,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v4
       with:
-        images: lm317379829/mediaTools
+        images: lm317379829/search
         tags: |
           type=raw,value=${{ steps.bump.outputs.new_tag }}
           type=raw,value=latest
@@ -65,5 +62,5 @@ jobs:
       with:
           keep_latest: 3
           delete_tags: true
-        env:
+      env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
