@@ -1,0 +1,167 @@
+from fastapi import FastAPI, Query, HTTPException
+from youtubesearchpython import VideosSearch, ChannelsSearch, PlaylistsSearch
+import uvicorn
+import time
+import asyncio
+import os
+import pickle
+import redis
+# 创建 FastAPI 实例
+app = FastAPI()
+
+# 全局缓存和并发锁 (本地回退方案)
+searchCache = {}
+cacheLock = asyncio.Lock()
+CacheTTL = 3600  # 缓存时间(秒)：1小时
+
+# Redis 初始化 (Vercel 持久化方案)
+# 你需要在 Vercel 环境变量中添加 REDIS_URL
+redis_url = os.getenv("REDIS_URL")
+r = redis.from_url(redis_url) if redis_url else None
+
+
+
+@app.get("/search")
+async def search(
+    keywords: str = Query(..., description="搜索关键词", min_length=1),
+    page: int = Query(1, description="页码, 从1开始", ge=1)
+):
+    """
+    搜索 YouTube 视频
+    """
+    try:
+        # 1. 尝试从缓存中读取
+        videoSearchOBJ = None
+        channelSearchOBJ = None
+        playlistSearchOBJ = None
+
+        cache_key = f"yt_search:{keywords}"
+        
+        if r:
+            # Redis 读取逻辑
+            cached_data = r.get(cache_key)
+            if cached_data:
+                try:
+                    cache, expireTime, cachePage = pickle.loads(cached_data)
+                    if page > cachePage:
+                        videoSearchOBJ = cache.get("video")
+                        channelSearchOBJ = cache.get("channel")
+                        playlistSearchOBJ = cache.get("playlist")
+                except Exception:
+                    r.delete(cache_key)
+        else:
+            # 内存读取逻辑 (本地)
+            async with cacheLock:
+                if keywords in searchCache:
+                    cache, expireTime, cachePage = searchCache[keywords]
+                    if int(time.time()) < expireTime and page > cachePage:
+                        videoSearchOBJ = cache.get("video")
+                        channelSearchOBJ = cache.get("channel")
+                        playlistSearchOBJ = cache.get("playlist")
+                    else:
+                        del searchCache[keywords]
+
+        # 2. 执行搜索（并发处理）
+        if page == 1:
+            # 初始搜索：并发实例化搜索对象，任务互不影响
+            objs = await asyncio.gather(
+                asyncio.to_thread(VideosSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
+                asyncio.to_thread(ChannelsSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
+                asyncio.to_thread(PlaylistsSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
+                return_exceptions=True
+            )
+            videoSearchOBJ = objs[0] if not isinstance(objs[0], Exception) else None
+            channelSearchOBJ = objs[1] if not isinstance(objs[1], Exception) else None
+            playlistSearchOBJ = objs[2] if not isinstance(objs[2], Exception) else None
+        else:
+            # 获取下一页：并发调用 .next()，任务互不影响
+            tasks = []
+            if videoSearchOBJ:
+                tasks.append(asyncio.to_thread(videoSearchOBJ.next))
+            if channelSearchOBJ:
+                tasks.append(asyncio.to_thread(channelSearchOBJ.next))
+            if playlistSearchOBJ:
+                tasks.append(asyncio.to_thread(playlistSearchOBJ.next))
+            
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 获取当前页结果
+        videos = videoSearchOBJ.result() if videoSearchOBJ and hasattr(videoSearchOBJ, 'result') else {"result": []}
+        channels = channelSearchOBJ.result() if channelSearchOBJ and hasattr(channelSearchOBJ, 'result') else {"result": []}
+        playlists = playlistSearchOBJ.result() if playlistSearchOBJ and hasattr(playlistSearchOBJ, 'result') else {"result": []}
+
+        vod = {"list": []}
+
+        results = (videos.get("result", []) or []) + \
+                  (channels.get("result", []) or []) + \
+                  (playlists.get("result", []) or [])
+
+        # 3. 将新的 searchOBJ 写入缓存
+        searchOBJs = {
+            "video": videoSearchOBJ if videos.get("result") and len(videos["result"]) == 20 else None,
+            "channel": channelSearchOBJ if channels.get("result") and len(channels["result"]) == 20 else None,
+            "playlist": playlistSearchOBJ if playlists.get("result") and len(playlists["result"]) == 20 else None
+        }
+
+        if any(v.get("result") and len(v["result"]) == 20 for v in [videos, channels, playlists]):
+            vod["hasNext"] = True
+
+        if r:
+            # 写入 Redis
+            try:
+                cache_data = pickle.dumps((searchOBJs, int(time.time() + CacheTTL), page))
+                r.setex(cache_key, CacheTTL, cache_data)
+            except Exception:
+                pass
+        else:
+            # 写入内存
+            async with cacheLock:
+                searchCache[keywords] = (searchOBJs, int(time.time() + CacheTTL), page)
+
+        for result in results:
+            if result["id"] == "":
+                continue
+
+            cate = result["type"]
+            if cate == "":
+                cate = "video"
+            vid = f'{{"cate":"{cate}","id":"{result["id"]}"}}'
+
+            # 取最大的图片
+            pic = ""
+            maxSize = -1
+            for thumbnail in result.get("thumbnails", []):
+                # 计算面积 (宽 * 高)
+                currentSize = thumbnail.get("width", 0) * thumbnail.get("width", 0)
+                if currentSize > maxSize:
+                    maxSize = currentSize
+                    pic = thumbnail.get("url", "")
+            
+            if pic != "" and not pic.startswith("http"):
+                pic = "https://" + pic.strip("/")
+
+            if cate == "video":
+                remarks = result.get('duration', "")
+            else:
+                remarks = result.get('videoCount', "")
+
+            if not remarks:
+                remarks = ""
+
+            vod["list"].append({
+                "vod_id": vid,
+                "vod_pic": pic,
+                "vod_name": result.get("title", "未知标题"),
+                "vod_tag": "folder" if cate == "channel" else "",
+                "vod_remarks": remarks.strip()
+            })
+
+            
+        return vod
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"搜索时发生错误: {str(err)}")
+
+if __name__ == "__main__":
+    # 如果代码文件名为 main.py，则传入 "main:app"
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
