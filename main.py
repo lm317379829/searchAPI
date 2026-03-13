@@ -199,7 +199,7 @@ async def search(
                 "vod_id": vid,
                 "vod_pic": pic,
                 "vod_name": result.get("title", "未知标题"),
-                "vod_tag": "folder" if cate == "channel" else "",
+                "vod_tag": "folder" if cate == "channel" or cate == "playlist" else "",
                 "vod_remarks": remarks.strip()
             })
 
