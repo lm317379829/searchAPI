@@ -183,7 +183,7 @@ async def search(
         playlists = playlistSearchOBJ.result() if playlistSearchOBJ and hasattr(playlistSearchOBJ, 'result') else {
             "result": []}
 
-        vod = {"list": [], "hasNext": False}
+        vods = {"list": [], "hasNext": False}
 
         results = (videos.get("result", []) or []) + \
                   (channels.get("result", []) or []) + \
@@ -195,19 +195,19 @@ async def search(
             searchOBJs = {}
             if videos.get("result") and len(videos["result"]) == 20:
                 searchOBJs["video"] = videoSearchOBJ
-                vod["hasNext"] = True
+                vods["hasNext"] = True
             else:
                 searchOBJs["video"] = None
 
             if channels.get("result") and len(channels["result"]) == 20:
                 searchOBJs["channel"] = channelSearchOBJ
-                vod["hasNext"] = True
+                vods["hasNext"] = True
             else:
                 searchOBJs["channel"] = None
 
             if playlists.get("result") and len(playlists["result"]) == 20:
                 searchOBJs["playlist"] = playlistSearchOBJ
-                vod["hasNext"] = True
+                vods["hasNext"] = True
             else:
                 searchOBJs["playlist"] = None
             searchCache[keywords] = (searchOBJs, int(time.time() + CacheTTL), page)
@@ -219,9 +219,7 @@ async def search(
             cate = result["type"]
             if cate == "":
                 cate = "video"
-            vid = f'{{"cate":"{cate}","id":"{result["id"]}"}}'
 
-            # 取最大的图片
             pic = handlePic(result.get("thumbnails", []))
 
             if cate == "video":
@@ -232,15 +230,17 @@ async def search(
             if not remarks:
                 remarks = ""
 
-            vod["list"].append({
-                "vod_id": vid,
-                "vod_pic": pic,
-                "vod_name": result.get("title", "未知标题"),
-                "vod_tag": "folder" if cate == "channel" or cate == "playlist" else "",
-                "vod_remarks": remarks.strip()
-            })
+            vod = {
+                "id": result["id"],
+                "pic": pic,
+                "cate": cate,
+                "name": result.get("title", "未知"),
+                "remarks": remarks.strip()
+            }
 
-        return vod
+            vods["list"].append(vod)
+
+        return vods
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"搜索错误: {str(err)}")
 
