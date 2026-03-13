@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import FileResponse
 
-from youtubesearchpython import CustomSearch, VideosSearch, ChannelsSearch, PlaylistsSearch, Video
+from youtubesearchpython import CustomSearch, VideosSearch, ChannelsSearch, PlaylistsSearch, Video, Playlist
 import uvicorn
 import time
 import asyncio
@@ -53,11 +53,26 @@ async def video(id: str = Query(..., description="视频ID")):
                 "name": channel.get("name", ""),
             }
         }
-
         return vod
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"获取视频信息错误: {str(err)}")
 
+@app.get("/playlist")
+async def playlist(id: str = Query(..., description="播放列表ID")):
+    try:
+        result = Playlist.get(id, timeout=30).get("info", {})
+        channel = result.get("channel", {})
+        vod = {
+            "name": result.get("title", ""),
+            "pic": handlePic(result.get("thumbnails", [])),
+            "channel": {
+                "id": channel.get("id", ""),
+                "name": channel.get("name", ""),
+            }
+        }
+        return vod
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"获取播放列表信息错误: {str(err)}")
 
 @app.get("/search")
 async def search(
@@ -65,10 +80,6 @@ async def search(
         filter: str = Query("", description="筛选条件", min_length=0),
         page: int = Query(1, description="页码, 从1开始", ge=1)
 ):
-    """
-    搜索 YouTube 视频
-    """
-
     # 筛选列表
     searchModes = {
         'videos': 'EgIQAQ%3D%3D',
