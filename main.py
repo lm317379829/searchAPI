@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Query, HTTPException
-from youtubesearchpython import VideosSearch, ChannelsSearch, PlaylistsSearch
+from youtubesearchpython import CustomSearch, VideosSearch, ChannelsSearch, PlaylistsSearch
 import uvicorn
 import time
 import asyncio
+
 # 创建 FastAPI 实例
 app = FastAPI()
 
@@ -11,12 +12,34 @@ searchCache = {}
 cacheLock = asyncio.Lock()
 CacheTTL = 3600  # 缓存时间(秒)：1小时
 
+# 筛选列表
+searchModes = {
+    'videos': 'EgIQAQ%3D%3D',
+    'channels': 'EgIQAg%3D%3D',
+    'playlists': 'EgIQAw%3D%3D',
+    'livestreams': 'EgJAAQ%3D%3D'
+}
+
+sortFilters = {
+    'relevance': 'CAASAhAB',
+    'uploadDate': 'CAISAhAB',
+    'viewCount': 'CAMSAhAB',
+    'rating': 'CAESAhAB',
+    'lastHour': 'EgQIARAB',
+    'today': 'EgQIAhAB',
+    'thisWeek': 'EgQIAxAB',
+    'thisMonth': 'EgQIBBAB',
+    'thisYear': 'EgQIBRAB',
+    'short': 'EgQQARgB',
+    'long': 'EgQQARgC'
+}
 
 
 @app.get("/search")
 async def search(
-    keywords: str = Query(..., description="搜索关键词", min_length=1),
-    page: int = Query(1, description="页码, 从1开始", ge=1)
+        keywords: str = Query(..., description="搜索关键词", min_length=1),
+        filter: str = Query("", description="筛选条件", min_length=0),
+        page: int = Query(1, description="页码, 从1开始", ge=1)
 ):
     """
     搜索 YouTube 视频
@@ -40,36 +63,80 @@ async def search(
                     del searchCache[keywords]
 
         # 2. 执行搜索（并发处理）
+        tasks = []
+        taskDict = {}  # 用于存储 Task 对象和对应的变量名
+
         if page == 1:
             # 初始搜索：并发实例化搜索对象，任务互不影响
-            objs = await asyncio.gather(
-                asyncio.to_thread(VideosSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
-                asyncio.to_thread(ChannelsSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
-                asyncio.to_thread(PlaylistsSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
-                return_exceptions=True
-            )
-            videoSearchOBJ = objs[0] if not isinstance(objs[0], Exception) else None
-            channelSearchOBJ = objs[1] if not isinstance(objs[1], Exception) else None
-            playlistSearchOBJ = objs[2] if not isinstance(objs[2], Exception) else None
+            if filter in searchModes.keys():
+                task = asyncio.create_task(
+                    asyncio.to_thread(CustomSearch, keywords, searchModes[filter], language="zh", region="CN", limit=20,
+                                      timeout=30),
+                    name=filter
+                )
+                tasks.append(task)
+                match filter:
+                    case "videos" | "livestreams":
+                        taskDict["videoSearchOBJ"] = task
+                    case "channels":
+                        taskDict["channelSearchOBJ"] = task
+                    case "playlists":
+                        taskDict["playlistSearchOBJ"] = task
+            elif filter in sortFilters.keys():
+                task = asyncio.create_task(
+                    asyncio.to_thread(CustomSearch, keywords, sortFilters[filter], language="zh", region="CN", limit=20,
+                                      timeout=30),
+                    name="videos"
+                )
+                tasks.append(task)
+                taskDict["videoSearchOBJ"] = task
+            else:
+                videos = asyncio.create_task(
+                    asyncio.to_thread(VideosSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
+                    name="videos")
+                channels = asyncio.create_task(
+                    asyncio.to_thread(ChannelsSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
+                    name="channels")
+                playlists = asyncio.create_task(
+                    asyncio.to_thread(PlaylistsSearch, keywords, language="zh", region="CN", limit=20, timeout=30),
+                    name="playlists")
+
+                tasks.extend([videos, channels, playlists])
+                taskDict["videoSearchOBJ"] = videos
+                taskDict["channelSearchOBJ"] = channels
+                taskDict["playlistSearchOBJ"] = playlists
         else:
             # 获取下一页：并发调用 .next()，任务互不影响
-            tasks = []
             if videoSearchOBJ:
-                tasks.append(asyncio.to_thread(videoSearchOBJ.next))
+                tasks.append(asyncio.create_task(asyncio.to_thread(videoSearchOBJ.next), name="videos"))
             if channelSearchOBJ:
-                tasks.append(asyncio.to_thread(channelSearchOBJ.next))
+                tasks.append(asyncio.create_task(asyncio.to_thread(channelSearchOBJ.next), name="channels"))
             if playlistSearchOBJ:
-                tasks.append(asyncio.to_thread(playlistSearchOBJ.next))
-            
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+                tasks.append(asyncio.create_task(asyncio.to_thread(playlistSearchOBJ.next), name="playlists"))
 
-        # 获取当前页结果
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        # 关键点：从 Task 中获取真正的 Search 对象实例 (仅在 page 1 时需要转换)
+        if page == 1:
+            if "videoSearchOBJ" in taskDict:
+                task = taskDict["videoSearchOBJ"]
+                videoSearchOBJ = task.result() if not isinstance(task.exception(), Exception) else None
+            if "channelSearchOBJ" in taskDict:
+                task = taskDict["channelSearchOBJ"]
+                channelSearchOBJ = task.result() if not isinstance(task.exception(), Exception) else None
+            if "playlistSearchOBJ" in taskDict:
+                task = taskDict["playlistSearchOBJ"]
+                playlistSearchOBJ = task.result() if not isinstance(task.exception(), Exception) else None
+
+        # 获取当前页结果 (此时 videoSearchOBJ 已经是真正的搜索对象实例)
         videos = videoSearchOBJ.result() if videoSearchOBJ and hasattr(videoSearchOBJ, 'result') else {"result": []}
-        channels = channelSearchOBJ.result() if channelSearchOBJ and hasattr(channelSearchOBJ, 'result') else {"result": []}
-        playlists = playlistSearchOBJ.result() if playlistSearchOBJ and hasattr(playlistSearchOBJ, 'result') else {"result": []}
+        channels = channelSearchOBJ.result() if channelSearchOBJ and hasattr(channelSearchOBJ, 'result') else {
+            "result": []}
+        playlists = playlistSearchOBJ.result() if playlistSearchOBJ and hasattr(playlistSearchOBJ, 'result') else {
+            "result": []}
 
-        vod = {"list": []}
+        vod = {"list": [], "hasNext": False}
 
         results = (videos.get("result", []) or []) + \
                   (channels.get("result", []) or []) + \
@@ -90,13 +157,13 @@ async def search(
                 vod["hasNext"] = True
             else:
                 searchOBJs["channel"] = None
-                
+
             if playlists.get("result") and len(playlists["result"]) == 20:
                 searchOBJs["playlist"] = playlistSearchOBJ
                 vod["hasNext"] = True
             else:
                 searchOBJs["playlist"] = None
-            searchCache[keywords] = (searchOBJs, int(time.time()+CacheTTL), page)
+            searchCache[keywords] = (searchOBJs, int(time.time() + CacheTTL), page)
 
         for result in results:
             if result["id"] == "":
@@ -116,7 +183,7 @@ async def search(
                 if currentSize > maxSize:
                     maxSize = currentSize
                     pic = thumbnail.get("url", "")
-            
+
             if pic != "" and not pic.startswith("http"):
                 pic = "https://" + pic.strip("/")
 
@@ -136,10 +203,10 @@ async def search(
                 "vod_remarks": remarks.strip()
             })
 
-            
         return vod
     except Exception as err:
         raise HTTPException(status_code=500, detail=f"搜索时发生错误: {str(err)}")
+
 
 if __name__ == "__main__":
     # 如果代码文件名为 main.py，则传入 "main:app"
