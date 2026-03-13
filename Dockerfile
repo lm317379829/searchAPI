@@ -12,12 +12,14 @@ RUN apt-get update && apt-get install -y \
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装 Python 依赖
+# 安装 Python 依赖  
 # 使用 --no-cache-dir 减少镜像体积
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制项目源代码
 COPY main.py .
+COPY index.html .
+COPY favicon.ico .
 
 # 暴露 FastAPI 运行的端口
 EXPOSE 8000

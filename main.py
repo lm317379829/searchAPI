@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Query, HTTPException
-from youtubesearchpython import CustomSearch, VideosSearch, ChannelsSearch, PlaylistsSearch
+from fastapi.responses import FileResponse
+
+from youtubesearchpython import CustomSearch, VideosSearch, ChannelsSearch, PlaylistsSearch, Video
 import uvicorn
 import time
 import asyncio
@@ -12,27 +14,49 @@ searchCache = {}
 cacheLock = asyncio.Lock()
 CacheTTL = 3600  # 缓存时间(秒)：1小时
 
-# 筛选列表
-searchModes = {
-    'videos': 'EgIQAQ%3D%3D',
-    'channels': 'EgIQAg%3D%3D',
-    'playlists': 'EgIQAw%3D%3D',
-    'livestreams': 'EgJAAQ%3D%3D'
-}
 
-sortFilters = {
-    'relevance': 'CAASAhAB',
-    'uploadDate': 'CAISAhAB',
-    'viewCount': 'CAMSAhAB',
-    'rating': 'CAESAhAB',
-    'lastHour': 'EgQIARAB',
-    'today': 'EgQIAhAB',
-    'thisWeek': 'EgQIAxAB',
-    'thisMonth': 'EgQIBBAB',
-    'thisYear': 'EgQIBRAB',
-    'short': 'EgQQARgB',
-    'long': 'EgQQARgC'
-}
+def handlePic(sources):
+    pic = ""
+    maxSize = -1
+    for thumbnail in sources:
+        # 计算面积 (宽 * 高)
+        currentSize = thumbnail.get("width", 0) * thumbnail.get("width", 0)
+        if currentSize > maxSize:
+            maxSize = currentSize
+            pic = thumbnail.get("url", "")
+
+    if pic != "" and not pic.startswith("http"):
+        pic = "https://" + pic.strip("/")
+
+    return pic
+
+@app.get("/")
+async def read_index():
+    return FileResponse("index.html")
+
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse("favicon.ico")
+
+@app.get("/video")
+async def video(id: str = Query(..., description="视频ID")):
+    try:
+        result = Video.get(id, timeout=30)
+        channel = result.get("channel", {})
+        duartion = result["duration"] if 'duration' in result else {}
+        vod = {
+            "name": result.get("title", ""),
+            "pic": handlePic(result.get("thumbnails", [])),
+            "duration": duartion.get("text", ""),
+            "channel": {
+                "id": channel.get("id", ""),
+                "name": channel.get("name", ""),
+            }
+        }
+
+        return vod
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"获取视频信息错误: {str(err)}")
 
 
 @app.get("/search")
@@ -44,6 +68,29 @@ async def search(
     """
     搜索 YouTube 视频
     """
+
+    # 筛选列表
+    searchModes = {
+        'videos': 'EgIQAQ%3D%3D',
+        'channels': 'EgIQAg%3D%3D',
+        'playlists': 'EgIQAw%3D%3D',
+        'livestreams': 'EgJAAQ%3D%3D'
+    }
+
+    sortFilters = {
+        'relevance': 'CAASAhAB',
+        'uploadDate': 'CAISAhAB',
+        'viewCount': 'CAMSAhAB',
+        'rating': 'CAESAhAB',
+        'lastHour': 'EgQIARAB',
+        'today': 'EgQIAhAB',
+        'thisWeek': 'EgQIAxAB',
+        'thisMonth': 'EgQIBBAB',
+        'thisYear': 'EgQIBRAB',
+        'short': 'EgQQARgB',
+        'long': 'EgQQARgC'
+    }
+
     try:
         # 1. 尝试从缓存中读取，使用锁保证并发读写安全
         videoSearchOBJ = None
@@ -175,17 +222,7 @@ async def search(
             vid = f'{{"cate":"{cate}","id":"{result["id"]}"}}'
 
             # 取最大的图片
-            pic = ""
-            maxSize = -1
-            for thumbnail in result.get("thumbnails", []):
-                # 计算面积 (宽 * 高)
-                currentSize = thumbnail.get("width", 0) * thumbnail.get("width", 0)
-                if currentSize > maxSize:
-                    maxSize = currentSize
-                    pic = thumbnail.get("url", "")
-
-            if pic != "" and not pic.startswith("http"):
-                pic = "https://" + pic.strip("/")
+            pic = handlePic(result.get("thumbnails", []))
 
             if cate == "video":
                 remarks = result.get('duration', "")
@@ -205,7 +242,7 @@ async def search(
 
         return vod
     except Exception as err:
-        raise HTTPException(status_code=500, detail=f"搜索时发生错误: {str(err)}")
+        raise HTTPException(status_code=500, detail=f"搜索错误: {str(err)}")
 
 
 if __name__ == "__main__":
