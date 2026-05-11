@@ -11,7 +11,6 @@ __pycache__
 main.py.bak
 Dockerfile
 .dockerignore
-.vercelignore
 build.sh
 *.egg-info
 dist/
