@@ -8,7 +8,7 @@
 - 📄 支持分页查询
 - 🎯 丰富的搜索筛选选项
 - ⚡ 并发搜索加速
-- 💾 智能缓存机制
+- 💾 智能缓存机制（依赖运行环境，Serverless 下为临时缓存）
 - 🌐 支持中文搜索和多区域查询
 
 ## API 端点
@@ -93,7 +93,7 @@ python main.py
 - ⏱️ **冷启动时间**: 首次请求可能需要 10-20 秒，这是 Serverless 的正常行为
 - 🔌 **外部依赖**: 该项目依赖外部 YouTube 服务，确保网络连接正常
 - ⏲️ **超时限制**: 默认超时时间为 10 秒（Vercel 标准版限制）
-- 💾 **缓存限制**: Serverless 环境中的缓存是临时的，不会跨请求保留
+- 💾 **缓存限制**: Serverless 环境中的缓存是临时的，不会跨请求保留，生产环境建议使用外部缓存（例如 Redis）
 
 ### 环境变量配置
 
@@ -102,24 +102,32 @@ python main.py
 PORT=3000
 ```
 
-## 项目结构
+## 项目结构（仓库根目录）
 
-```
-searchAPI/
-├── main.py              # FastAPI 应用主文件
-├── requirements.txt     # Python 依赖
-├── index.html          # Web 界面
-├── favicon.ico         # 网站图标
-├── vercel.json         # Vercel 配置
-├── build.sh            # 构建脚本
-├── Dockerfile          # Docker 配置
-└── README.md           # 本文件
-```
+以下为仓库根目录文件/目录的核对结果，并对每项做了用途说明：
+
+- .dockerignore         # Docker 忽略配置
+- .github/              # GitHub Actions / 工作流（如存在）
+- .gitignore            # Git 忽略规则
+- .vercelignore         # Vercel 部署忽略规则
+- Dockerfile            # 容器化配置，用于生成镜像
+- README.md             # 本文件
+- api/                  # 后端代码目录（FastAPI 应用相关）
+- index.html            # 前端 Web 界面（搜索 UI）
+- favicon.ico           # 网站图标资源
+- requirements.txt      # Python 依赖
+- vercel.json           # Vercel 部署配置
+
+请根据实际需要在 `api/` 目录中补充说明各子文件（例如 `main.py`、`routers/`、`services/` 等），如果仓库内缺少某些在 README 里曾提到的文件（例如 `main.py`），建议同步补充或移除对应说明以避免歧义。
 
 ## 技术栈
 
 - **Framework**: FastAPI
 - **Server**: Uvicorn
+- **Language Composition**:
+  - Python (57.3%): 后端与业务逻辑
+  - HTML (39.2%): 前端界面
+  - Dockerfile (3.5%): 容器化支持
 - **Search**: youtube-search-python
 - **Async**: asyncio
 - **Deployment**: Docker / Vercel
@@ -139,7 +147,7 @@ A: 这可能是因为：
 3. 并发请求过多
 
 ### Q: 缓存不工作？
-A: Serverless 环境中缓存是临时的，每次函数启动时会重置。考虑使用外部���存服务如 Redis。
+A: Serverless 环境中缓存是临时的，每次函数启动时会重置。考虑使用外部缓存服务如 Redis。
 
 ## 许可证
 
